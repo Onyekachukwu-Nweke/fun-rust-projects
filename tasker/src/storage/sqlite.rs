@@ -49,8 +49,8 @@ impl Repository for SqliteRepo {
     fn create(&self, task: Task) -> Result<Task> {
         let conn = self.conn()?;
         conn.execute(
-            "INSERT INTO tasks(id,title,notes,status,priority,created_at,updated_at)
-             VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO tasks(id,title,status,created_at,updated_at)
+             VALUES(?,?,?,?,?)",
             params![
                 task.id.to_string(),
                 task.title,
@@ -65,10 +65,10 @@ impl Repository for SqliteRepo {
     fn get(&self, id: Uuid) -> Result<Option<Task>> {
         let conn = self.conn()?;
         conn.query_row(
-            "SELECT id,title,notes,status,priority,created_at,updated_at FROM tasks WHERE id=?1",
+            "SELECT id,title,status,created_at,updated_at FROM tasks WHERE id=?1",
             [id.to_string()],
             |r| {
-                let status_str: String = r.get(3)?;
+                let status_str: String = r.get(2)?;
                 let status = match status_str.as_str() {
                     "todo" => Status::Todo,
                     "in_progress" => Status::InProgress,
@@ -78,8 +78,8 @@ impl Repository for SqliteRepo {
                     id: Uuid::parse_str(r.get::<_, String>(0)?.as_str()).unwrap(),
                     title: r.get(1)?,
                     status,
-                    created_at: chrono::DateTime::parse_from_rfc3339(&r.get::<_, String>(5)?).unwrap().with_timezone(&chrono::Utc),
-                    updated_at: chrono::DateTime::parse_from_rfc3339(&r.get::<_, String>(6)?).unwrap().with_timezone(&chrono::Utc),
+                    created_at: chrono::DateTime::parse_from_rfc3339(&r.get::<_, String>(3)?).unwrap().with_timezone(&chrono::Utc),
+                    updated_at: chrono::DateTime::parse_from_rfc3339(&r.get::<_, String>(4)?).unwrap().with_timezone(&chrono::Utc),
                 })
             }
         ).optional().map_err(Into::into)
@@ -87,52 +87,62 @@ impl Repository for SqliteRepo {
 
     fn list(&self, q: Query) -> Result<Vec<Task>> {
         let conn = self.conn()?;
-        let mut sql = "SELECT id,title,notes,status,priority,created_at,updated_at FROM tasks".to_string();
-        let mut clauses: Vec<&str> = vec![];
-        let mut params: Vec<(String, String)> = vec![];
 
-        if let Some(status) = q.status {
-            clauses.push("status = :status");
-            params.push(("status".into(), match status { Status::Todo=>"todo".into(), Status::InProgress=>"in_progress".into(), Status::Done=>"done".into() }));
+        let mut sql = "SELECT id,title,status,created_at,updated_at FROM tasks".to_string();
+        let mut conditions = vec![];
+
+        if q.status.is_some() {
+            conditions.push("status = ?");
         }
-        if let Some(s) = q.search {
-            clauses.push("(LOWER(title) LIKE :s OR LOWER(notes) LIKE :s)");
-            params.push(("s".into(), format!("%{}%", s.to_lowercase())));
+        if q.search.is_some() {
+            conditions.push("LOWER(title) LIKE ?");
         }
-        if !clauses.is_empty() {
+
+        if !conditions.is_empty() {
             sql.push_str(" WHERE ");
-            sql.push_str(&clauses.join(" AND "));
+            sql.push_str(&conditions.join(" AND "));
         }
-        sql.push_str(" ORDER BY COALESCE(priority,0) DESC, created_at DESC");
+        sql.push_str(" ORDER BY created_at DESC");
 
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(params.iter().map(|(k,v)| (k.as_str(), v as &dyn rusqlite::ToSql)), |r| {
-            let status_str: String = r.get(3)?;
+        let mut param_index = 1;
+
+        if let Some(status) = q.status {
+            let status_str = match status { Status::Todo=>"todo", Status::InProgress=>"in_progress", Status::Done=>"done" };
+            stmt.raw_bind_parameter(param_index, status_str)?;
+            param_index += 1;
+        }
+        if let Some(search) = q.search {
+            let search_pattern = format!("%{}%", search.to_lowercase());
+            stmt.raw_bind_parameter(param_index, search_pattern)?;
+        }
+
+        let mut rows = stmt.raw_query();
+        let mut out = vec![];
+
+        while let Some(row) = rows.next()? {
+            let status_str: String = row.get(2)?;
             let status = match status_str.as_str() {
                 "todo" => Status::Todo,
                 "in_progress" => Status::InProgress,
                 _ => Status::Done,
             };
-            Ok(Task{
-                id: Uuid::parse_str(r.get::<_, String>(0)?.as_str()).unwrap(),
-                title: r.get(1)?,
+            out.push(Task{
+                id: Uuid::parse_str(row.get::<_, String>(0)?.as_str()).unwrap(),
+                title: row.get(1)?,
                 status,
-                created_at: chrono::DateTime::parse_from_rfc3339(&r.get::<_, String>(5)?).unwrap().with_timezone(&chrono::Utc),
-                updated_at: chrono::DateTime::parse_from_rfc3339(&r.get::<_, String>(6)?).unwrap().with_timezone(&chrono::Utc),
-            })
-        })?;
-
-        let mut out = vec![];
-        for row in rows {
-            out.push(row?);
+                created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?).unwrap().with_timezone(&chrono::Utc),
+                updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?).unwrap().with_timezone(&chrono::Utc),
+            });
         }
+
         Ok(out)
     }
 
     fn update(&self, task: Task) -> Result<Task> {
         let conn = self.conn()?;
         let affected = conn.execute(
-            "UPDATE tasks SET title=?, notes=?, status=?, priority=?, updated_at=? WHERE id=?",
+            "UPDATE tasks SET title=?, status=?, updated_at=? WHERE id=?",
             params![
                 task.title,
                 match task.status { Status::Todo=>"todo", Status::InProgress=>"in_progress", Status::Done=>"done" },
