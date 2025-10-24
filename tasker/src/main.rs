@@ -1,17 +1,17 @@
-mod task;
 mod repo;
 mod storage;
+mod task;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use repo::{Repository, Query};
+use repo::{Query, Repository};
 use task::{Status, Task};
 
 #[cfg(feature = "sqlite")]
 use storage::sqlite::SqliteRepo as RepoImpl;
 
 #[derive(Debug, Parser)]
-#[command(name="tasker", about="A tiny task manager CLI in Rust")]
+#[command(name = "tasker", about = "A tiny task manager CLI in Rust")]
 struct Cli {
     /// SQLite file path (only used when compiled with `sqlite`)
     #[arg(global = true, long, default_value = "tasker.db")]
@@ -22,24 +22,32 @@ struct Cli {
 }
 
 #[derive(Debug, Clone, ValueEnum)]
-enum StatusArg { Todo, InProgress, Done }
+enum StatusArg {
+    Todo,
+    InProgress,
+    Done,
+}
 
 impl From<StatusArg> for Status {
     fn from(s: StatusArg) -> Self {
-        match s { StatusArg::Todo => Status::Todo, StatusArg::InProgress => Status::InProgress, StatusArg::Done => Status::Done }
+        match s {
+            StatusArg::Todo => Status::Todo,
+            StatusArg::InProgress => Status::InProgress,
+            StatusArg::Done => Status::Done,
+        }
     }
 }
 
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Add a task
-    Add {
-        title: String,
-    },
+    Add { title: String },
     /// List tasks
     List {
-        #[arg(long)] status: Option<StatusArg>,
-        #[arg(long)] search: Option<String>,
+        #[arg(long)]
+        status: Option<StatusArg>,
+        #[arg(long)]
+        search: Option<String>,
     },
     /// Show one task
     Get { id: String },
@@ -48,12 +56,12 @@ enum Commands {
     /// Edit task fields
     Edit {
         id: String,
-        #[arg(long)] title: Option<String>,
+        #[arg(long)]
+        title: Option<String>,
     },
     /// Delete a task
     Rm { id: String },
 }
-
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -66,18 +74,26 @@ fn main() -> Result<()> {
     };
 
     match cli.command {
-        Commands::Add { title} => {
+        Commands::Add { title } => {
             let task = Task::new(title);
             let saved = repo.create(task)?;
             println!("{}", saved.id);
         }
         Commands::List { status, search } => {
-            let tasks = repo.list(Query { status: status.map(Into::into), search })?;
+            let tasks = repo.list(Query {
+                status: status.map(Into::into),
+                search,
+            })?;
             for t in tasks {
-                println!("{} | [{}] {}",
-                         t.id,
-                         match t.status { Status::Todo=>"todo", Status::InProgress=>"in_progress", Status::Done=>"done" },
-                         t.title
+                println!(
+                    "{} | [{}] {}",
+                    t.id,
+                    match t.status {
+                        Status::Todo => "todo",
+                        Status::InProgress => "in_progress",
+                        Status::Done => "done",
+                    },
+                    t.title
                 );
             }
         }
@@ -101,8 +117,12 @@ fn main() -> Result<()> {
         }
         Commands::Edit { id, title } => {
             let id = uuid::Uuid::parse_str(&id)?;
-            let mut t = repo.get(id)?.ok_or_else(|| anyhow::anyhow!("Task not found"))?;
-            if let Some(v) = title { t.title = v; }
+            let mut t = repo
+                .get(id)?
+                .ok_or_else(|| anyhow::anyhow!("Task not found"))?;
+            if let Some(v) = title {
+                t.title = v;
+            }
             t.updated_at = chrono::Utc::now();
             repo.update(t)?;
             println!("ok");

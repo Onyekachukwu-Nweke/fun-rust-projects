@@ -1,14 +1,14 @@
 #[cfg(feature = "sqlite")]
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 #[cfg(feature = "sqlite")]
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 #[cfg(feature = "sqlite")]
 use uuid::Uuid;
 
 #[cfg(feature = "sqlite")]
-use crate::task::{Status, Task};
-#[cfg(feature = "sqlite")]
 use crate::repo::{Query, Repository};
+#[cfg(feature = "sqlite")]
+use crate::task::{Status, Task};
 
 #[cfg(feature = "sqlite")]
 #[derive(Clone)]
@@ -41,7 +41,7 @@ impl Repository for SqliteRepo {
                 updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
-            "#
+            "#,
         )?;
         Ok(())
     }
@@ -54,7 +54,11 @@ impl Repository for SqliteRepo {
             params![
                 task.id.to_string(),
                 task.title,
-                match task.status { Status::Todo=>"todo", Status::InProgress=>"in_progress", Status::Done=>"done" },
+                match task.status {
+                    Status::Todo => "todo",
+                    Status::InProgress => "in_progress",
+                    Status::Done => "done",
+                },
                 task.created_at.to_rfc3339(),
                 task.updated_at.to_rfc3339()
             ],
@@ -74,15 +78,21 @@ impl Repository for SqliteRepo {
                     "in_progress" => Status::InProgress,
                     _ => Status::Done,
                 };
-                Ok(Task{
+                Ok(Task {
                     id: Uuid::parse_str(r.get::<_, String>(0)?.as_str()).unwrap(),
                     title: r.get(1)?,
                     status,
-                    created_at: chrono::DateTime::parse_from_rfc3339(&r.get::<_, String>(3)?).unwrap().with_timezone(&chrono::Utc),
-                    updated_at: chrono::DateTime::parse_from_rfc3339(&r.get::<_, String>(4)?).unwrap().with_timezone(&chrono::Utc),
+                    created_at: chrono::DateTime::parse_from_rfc3339(&r.get::<_, String>(3)?)
+                        .unwrap()
+                        .with_timezone(&chrono::Utc),
+                    updated_at: chrono::DateTime::parse_from_rfc3339(&r.get::<_, String>(4)?)
+                        .unwrap()
+                        .with_timezone(&chrono::Utc),
                 })
-            }
-        ).optional().map_err(Into::into)
+            },
+        )
+        .optional()
+        .map_err(Into::into)
     }
 
     fn list(&self, q: Query) -> Result<Vec<Task>> {
@@ -108,7 +118,11 @@ impl Repository for SqliteRepo {
         let mut param_index = 1;
 
         if let Some(status) = q.status {
-            let status_str = match status { Status::Todo=>"todo", Status::InProgress=>"in_progress", Status::Done=>"done" };
+            let status_str = match status {
+                Status::Todo => "todo",
+                Status::InProgress => "in_progress",
+                Status::Done => "done",
+            };
             stmt.raw_bind_parameter(param_index, status_str)?;
             param_index += 1;
         }
@@ -127,12 +141,16 @@ impl Repository for SqliteRepo {
                 "in_progress" => Status::InProgress,
                 _ => Status::Done,
             };
-            out.push(Task{
+            out.push(Task {
                 id: Uuid::parse_str(row.get::<_, String>(0)?.as_str()).unwrap(),
                 title: row.get(1)?,
                 status,
-                created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?).unwrap().with_timezone(&chrono::Utc),
-                updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?).unwrap().with_timezone(&chrono::Utc),
+                created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(3)?)
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+                updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<_, String>(4)?)
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
             });
         }
 
@@ -145,12 +163,18 @@ impl Repository for SqliteRepo {
             "UPDATE tasks SET title=?, status=?, updated_at=? WHERE id=?",
             params![
                 task.title,
-                match task.status { Status::Todo=>"todo", Status::InProgress=>"in_progress", Status::Done=>"done" },
+                match task.status {
+                    Status::Todo => "todo",
+                    Status::InProgress => "in_progress",
+                    Status::Done => "done",
+                },
                 task.updated_at.to_rfc3339(),
                 task.id.to_string()
             ],
         )?;
-        if affected == 0 { bail!("Task not found"); }
+        if affected == 0 {
+            bail!("Task not found");
+        }
         Ok(task)
     }
 
@@ -164,7 +188,11 @@ impl Repository for SqliteRepo {
         Ok(conn.execute(
             "UPDATE tasks SET status=?, updated_at=? WHERE id=?",
             params![
-                match status { Status::Todo=>"todo", Status::InProgress=>"in_progress", Status::Done=>"done" },
+                match status {
+                    Status::Todo => "todo",
+                    Status::InProgress => "in_progress",
+                    Status::Done => "done",
+                },
                 chrono::Utc::now().to_rfc3339(),
                 id.to_string()
             ],
