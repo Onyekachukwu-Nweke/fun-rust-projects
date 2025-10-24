@@ -36,9 +36,7 @@ impl Repository for SqliteRepo {
             CREATE TABLE IF NOT EXISTS tasks(
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
-                notes TEXT,
                 status TEXT NOT NULL,
-                priority INTEGER,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -56,9 +54,7 @@ impl Repository for SqliteRepo {
             params![
                 task.id.to_string(),
                 task.title,
-                task.notes,
-                match task.status { Status::Todo=>"todo", Status::Doing=>"doing", Status::Done=>"done" },
-                task.priority.map(|p| p as i64),
+                match task.status { Status::Todo=>"todo", Status::InProgress=>"in_progress", Status::Done=>"done" },
                 task.created_at.to_rfc3339(),
                 task.updated_at.to_rfc3339()
             ],
@@ -75,15 +71,13 @@ impl Repository for SqliteRepo {
                 let status_str: String = r.get(3)?;
                 let status = match status_str.as_str() {
                     "todo" => Status::Todo,
-                    "doing" => Status::Doing,
+                    "in_progress" => Status::InProgress,
                     _ => Status::Done,
                 };
                 Ok(Task{
                     id: Uuid::parse_str(r.get::<_, String>(0)?.as_str()).unwrap(),
                     title: r.get(1)?,
-                    notes: r.get(2)?,
                     status,
-                    priority: r.get::<_, Option<i64>>(4)?.map(|v| v as u8),
                     created_at: chrono::DateTime::parse_from_rfc3339(&r.get::<_, String>(5)?).unwrap().with_timezone(&chrono::Utc),
                     updated_at: chrono::DateTime::parse_from_rfc3339(&r.get::<_, String>(6)?).unwrap().with_timezone(&chrono::Utc),
                 })
@@ -99,7 +93,7 @@ impl Repository for SqliteRepo {
 
         if let Some(status) = q.status {
             clauses.push("status = :status");
-            params.push(("status".into(), match status { Status::Todo=>"todo".into(), Status::Doing=>"doing".into(), Status::Done=>"done".into() }));
+            params.push(("status".into(), match status { Status::Todo=>"todo".into(), Status::InProgress=>"in_progress".into(), Status::Done=>"done".into() }));
         }
         if let Some(s) = q.search {
             clauses.push("(LOWER(title) LIKE :s OR LOWER(notes) LIKE :s)");
@@ -112,19 +106,17 @@ impl Repository for SqliteRepo {
         sql.push_str(" ORDER BY COALESCE(priority,0) DESC, created_at DESC");
 
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map_named(params.iter().map(|(k,v)| (k.as_str(), v as &dyn rusqlite::ToSql)), |r| {
+        let rows = stmt.query_map(params.iter().map(|(k,v)| (k.as_str(), v as &dyn rusqlite::ToSql)), |r| {
             let status_str: String = r.get(3)?;
             let status = match status_str.as_str() {
                 "todo" => Status::Todo,
-                "doing" => Status::Doing,
+                "in_progress" => Status::InProgress,
                 _ => Status::Done,
             };
             Ok(Task{
                 id: Uuid::parse_str(r.get::<_, String>(0)?.as_str()).unwrap(),
                 title: r.get(1)?,
-                notes: r.get(2)?,
                 status,
-                priority: r.get::<_, Option<i64>>(4)?.map(|v| v as u8),
                 created_at: chrono::DateTime::parse_from_rfc3339(&r.get::<_, String>(5)?).unwrap().with_timezone(&chrono::Utc),
                 updated_at: chrono::DateTime::parse_from_rfc3339(&r.get::<_, String>(6)?).unwrap().with_timezone(&chrono::Utc),
             })
@@ -143,9 +135,7 @@ impl Repository for SqliteRepo {
             "UPDATE tasks SET title=?, notes=?, status=?, priority=?, updated_at=? WHERE id=?",
             params![
                 task.title,
-                task.notes,
-                match task.status { Status::Todo=>"todo", Status::Doing=>"doing", Status::Done=>"done" },
-                task.priority.map(|p| p as i64),
+                match task.status { Status::Todo=>"todo", Status::InProgress=>"in_progress", Status::Done=>"done" },
                 task.updated_at.to_rfc3339(),
                 task.id.to_string()
             ],
@@ -164,7 +154,7 @@ impl Repository for SqliteRepo {
         Ok(conn.execute(
             "UPDATE tasks SET status=?, updated_at=? WHERE id=?",
             params![
-                match status { Status::Todo=>"todo", Status::InProgress=>"doing", Status::Done=>"done" },
+                match status { Status::Todo=>"todo", Status::InProgress=>"in_progress", Status::Done=>"done" },
                 chrono::Utc::now().to_rfc3339(),
                 id.to_string()
             ],
