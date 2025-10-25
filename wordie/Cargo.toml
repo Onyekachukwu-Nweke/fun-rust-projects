@@ -1,0 +1,11 @@
+[package]
+name = "wordie"
+version = "0.1.0"
+edition = "2024"
+authors = ["Onyekachukwu Nweke <nwekeejioforscheller@gmail.com>"]
+
+[lib]
+name = "wordie"
+path = "src/lib.rs"
+
+[dependencies]
