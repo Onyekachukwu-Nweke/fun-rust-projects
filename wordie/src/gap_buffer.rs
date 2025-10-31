@@ -1,4 +1,4 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct GapBuffer {
     buf: Vec<char>,
     gap_start: usize,
