@@ -49,4 +49,35 @@ impl Editor {
         }
         CursorPos { line, col }
     }
+
+    /// Move cursor to (line, col), clamped.
+    pub fn move_to(&mut self, line: usize, col: usize) {
+        let text = self.gb.text();
+        // Build line starts
+        let mut starts = vec![0usize];
+        for (i, ch) in text.chars().enumerate() {
+            if ch == '\n' { starts.push(i + 1); }
+        }
+        // Compute target
+        let line = line.min(starts.len().saturating_sub(1));
+        let line_start = starts[line];
+        let line_end = if line + 1 < starts.len() { starts[line + 1] - 1 } else { text.chars().count() };
+        let line_len = line_end.saturating_sub(line_start);
+        let target = line_start + col.min(line_len);
+
+        // Move the gap to target by stepping left/right.
+        while self.gb.cursor_offset() < target { self.gb.move_right(); }
+        while self.gb.cursor_offset() > target { self.gb.move_left(); }
+    }
+
+    pub fn move_up(&mut self) {
+        let pos = self.cursor_pos();
+        let line = pos.line.saturating_sub(1);
+        self.move_to(line, pos.col);
+    }
+
+    pub fn move_down(&mut self) {
+        let pos = self.cursor_pos();
+        self.move_to(pos.line + 1, pos.col);
+    }
 }
