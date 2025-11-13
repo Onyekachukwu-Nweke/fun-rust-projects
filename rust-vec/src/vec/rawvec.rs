@@ -1,11 +1,42 @@
 use std::alloc::{self, Layout};
 use std::ptr::NonNull;
-use super::core::Vec;
+use std::mem;
 
-impl<T> Vec<T> {
-    // Doubles the capacity when we run out of space
-    // Starts at 1 if we're currently empty
-    pub(super) fn grow(&mut self) {
+/// RawVec handles the raw memory allocation for Vec
+/// Separates memory management concerns from Vec's logic
+pub struct RawVec<T> {
+    ptr: NonNull<T>,
+    cap: usize,
+}
+
+// Make sure RawVec can be sent across threads if T can
+unsafe impl<T: Send> Send for RawVec<T> {}
+unsafe impl<T: Sync> Sync for RawVec<T> {}
+
+impl<T> RawVec<T> {
+    /// Creates a new RawVec with zero capacity
+    /// We don't support zero-sized types because their layout is weird
+    pub fn new() -> Self {
+        assert_ne!(mem::size_of::<T>(), 0, "zero sized types are not supported");
+        RawVec {
+            ptr: NonNull::dangling(),
+            cap: 0,
+        }
+    }
+
+    /// Returns the current capacity
+    pub fn cap(&self) -> usize {
+        self.cap
+    }
+
+    /// Returns the raw pointer
+    pub fn ptr(&self) -> NonNull<T> {
+        self.ptr
+    }
+
+    /// Doubles the capacity when we run out of space
+    /// Starts at 1 if we're currently empty
+    pub fn grow(&mut self) {
         let (new_cap, new_layout) = if self.cap == 0 {
             (1, Layout::array::<T>(1).unwrap())
         } else {
@@ -37,5 +68,17 @@ impl<T> Vec<T> {
             None => alloc::handle_alloc_error(new_layout),
         };
         self.cap = new_cap;
+    }
+}
+
+impl<T> Drop for RawVec<T> {
+    fn drop(&mut self) {
+        if self.cap != 0 {
+            // Deallocate the memory
+            let layout = Layout::array::<T>(self.cap).unwrap();
+            unsafe {
+                alloc::dealloc(self.ptr.as_ptr() as *mut u8, layout);
+            }
+        }
     }
 }
