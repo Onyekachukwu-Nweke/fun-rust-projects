@@ -292,7 +292,7 @@ hexaprint/
 ## Implementation Milestones
 
 ### Phase 1: Basic Functionality
-- [ ] Set up project structure with Cargo
+- [X] Set up project structure with Cargo
 - [ ] Implement basic file reading
 - [ ] Display simple hex output (no formatting)
 - [ ] Add offset column
