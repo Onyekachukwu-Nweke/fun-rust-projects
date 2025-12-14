@@ -1,5 +1,10 @@
+use std::io::{BufRead, Result};
+use std::fmt;
+use crate::formatter::{read_chunk, print_line};
+use clap::ValueEnum;
+
 #[derive(Debug)]
-struct HexDumper {
+pub struct HexDumper {
   bytes_per_line: usize,
   show_ascii: bool,
   output_format: OutputFormat,
@@ -7,15 +12,34 @@ struct HexDumper {
   offset: usize,
 }
 
-enum OutputFormat {
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum OutputFormat {
   Canonical,
   PlainHex,
   CArray,
   Uppercase,
 }
 
+impl fmt::Display for OutputFormat {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match self {
+      OutputFormat::Canonical => write!(f, "canonical"),
+      OutputFormat::PlainHex => write!(f, "plain-hex"),
+      OutputFormat::CArray => write!(f, "c-array"),
+      OutputFormat::Uppercase => write!(f, "uppercase"),
+    }
+  }
+}
+
+const BUFFER_SIZE: usize = 8192;
+
 impl HexDumper {
-  fn new(bytes_per_line: usize, show_ascii: bool, output_format: OutputFormat, use_colors: bool) -> HexDumper {
+  pub fn new(
+    bytes_per_line: usize,
+    show_ascii: bool,
+    output_format: OutputFormat,
+    use_colors: bool,
+  ) -> HexDumper {
     HexDumper {
       bytes_per_line,
       show_ascii,
@@ -25,17 +49,28 @@ impl HexDumper {
     }
   }
 
-  fn dump(&mut self, input: impl BufRead) -> io::Result<()> {
-    let mut offset = 0;
-    let mut buffer = [0; 16];
+  pub fn dump(&mut self, mut input: impl BufRead) -> Result<()> {
+    let mut offset = self.offset;
+    let mut buffer = vec![0; BUFFER_SIZE];
+
     loop {
-      let bytes_read = input.read(&mut buffer)?;
+      let bytes_read = read_chunk(&mut input, &mut buffer)?;
+
       if bytes_read == 0 {
         break;
       }
-      self.offset += bytes_read;
-      self.dump_line(&buffer[..bytes_read]);
+
+      for chunk in buffer[..bytes_read].chunks(self.bytes_per_line) {
+        print_line(
+          offset,
+          chunk,
+          self.bytes_per_line,
+          self.show_ascii,
+        );
+        offset += chunk.len();
+      }
     }
+
     Ok(())
   }
 }

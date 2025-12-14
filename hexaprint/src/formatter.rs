@@ -14,18 +14,18 @@ fn is_printable(byte: u8) -> bool {
 
 fn format_ascii(byte: u8) -> String {
     if is_printable(byte) {
-        format!("{:c}", byte)
+        (byte as char).to_string()
     } else {
-        format!(".")
+        ".".to_string()
     }
 }
 
 //TODO: Error handling and statement matching
-fn read_chunk(source: impl BufRead, buffer: &mut [u8]) -> io::Result<usize> {
+pub fn read_chunk(source: &mut impl BufRead, buffer: &mut [u8]) -> io::Result<usize> {
     source.read(buffer)
 }
 
-fn print_line(offset: usize, data: &[u8], bytes_per_line: usize, show_ascii: bool) {
+pub fn print_line(offset: usize, data: &[u8], bytes_per_line: usize, show_ascii: bool) {
     let mut output = format_offset(offset);
     output.push_str(": ");
 
@@ -35,8 +35,8 @@ fn print_line(offset: usize, data: &[u8], bytes_per_line: usize, show_ascii: boo
     }
 
     if data.len() < bytes_per_line {
-       padding_spaces = (bytes_per_line - data.len()) * 3;
-       output.push_str(" " * padding_spaces);
+       let padding_spaces = (bytes_per_line - data.len()) * 3;
+       output.push_str(&" ".repeat(padding_spaces));
     }
 
     if show_ascii {
