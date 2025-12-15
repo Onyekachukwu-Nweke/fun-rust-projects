@@ -293,15 +293,15 @@ hexaprint/
 
 ### Phase 1: Basic Functionality
 - [X] Set up project structure with Cargo
-- [ ] Implement basic file reading
-- [ ] Display simple hex output (no formatting)
-- [ ] Add offset column
+- [X] Implement basic file reading
+- [X] Display simple hex output (no formatting)
+- [X] Add offset column
 
 ### Phase 2: Standard Hex Dump Format
-- [ ] Implement canonical format (offset | hex | ASCII)
-- [ ] Add proper spacing and alignment
-- [ ] Handle partial lines at end of file
-- [ ] Add ASCII representation with non-printable character handling
+- [X] Implement canonical format (offset | hex | ASCII)
+- [X] Add proper spacing and alignment
+- [X] Handle partial lines at end of file
+- [X] Add ASCII representation with non-printable character handling
 
 ### Phase 3: CLI and Configuration
 - [ ] Add command-line argument parsing
