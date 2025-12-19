@@ -46,6 +46,8 @@ fn text_to_binary(text: &str) -> String {
         .join(" ")
 }
 
+
+
 fn main() {
     let args = Args::parse();
 

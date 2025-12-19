@@ -194,8 +194,9 @@ FUNCTION colorize(byte, text):
 ```
 
 ### Phase 3 Implementation: Reading from stdin
+**File: `src/main.rs`**
 
-```
+```rust
 FUNCTION get_input_source(input_file_option):
     // Determine input source: file or stdin
     MATCH input_file_option:
@@ -211,97 +212,166 @@ FUNCTION get_input_source(input_file_option):
         None:
             // Read from stdin when no file is provided
             stdin = io::stdin()
-            RETURN Ok(BufReader::new(stdin.lock()))
+            RETURN BufReader::new(stdin.lock())
 
 // Updated main flow with stdin support
+// Modify the existing main() function in src/main.rs
 FUNCTION main():
     args = parse_arguments()
 
-    // Get input from file or stdin
-    input_source = get_input_source(args.input_file)
+    // Validate arguments (existing code)
+    IF args.output.is_some() AND NOT args.binary:
+        eprintln!("--output can only be used with --binary")
+        exit(1)
+
+    // CHANGE: Remove the error when input_file is None
+    // Instead, get input from file or stdin
+    input_source = MATCH args.input_file:
+        Some(path):
+            file = File::open(&path).unwrap_or_else(|e| {
+                eprintln!("Error opening file '{}': {}", path, e)
+                exit(1)
+            })
+            BufReader::new(file)
+        None:
+            // Read from stdin
+            BufReader::new(io::stdin().lock())
 
     // Create and run dumper
-    dumper = HexDumper::new(...)
-    dumper.dump(input_source)?
+    IF args.binary:
+        // ... existing binary mode logic
+    ELSE:
+        // Hex dump mode
+        dumper = HexDumper::new(
+            args.bytes_per_line,
+            args.show_ascii,
+            args.output_format,
+            args.use_colors,
+        )
+        dumper.dump(input_source).unwrap()
 ```
 
 ### Phase 3 Implementation: Skip and Length Options
 
+**Files to modify:**
+1. `src/main.rs` - Add CLI arguments for skip and length
+2. `src/dumper.rs` - Modify `dump()` method to support length limit
+
+**Step 1: Add CLI arguments in `src/main.rs`**
+
+```rust
+// Add to Args struct in src/main.rs
+#[derive(Parser)]
+struct Args {
+    // ... existing fields ...
+
+    /// Number of bytes to display
+    #[arg(short = 'n', long)]
+    length: Option<usize>,
+
+    /// Skip N bytes from start
+    #[arg(short = 's', long)]
+    skip: Option<usize>,
+}
 ```
-FUNCTION apply_skip_bytes(input_source, skip_bytes):
-    // Skip N bytes from the beginning
-    IF skip_bytes > 0:
-        TRY:
-            // Read and discard skip_bytes
-            discard_buffer = vec![0; skip_bytes]
-            input_source.read_exact(&mut discard_buffer)?
-        CATCH error:
-            eprintln!("Error skipping {} bytes: {}", skip_bytes, error)
-            RETURN Err(error)
 
-    RETURN Ok(())
+**Step 2: Apply skip in `src/main.rs` main() function**
 
-FUNCTION dump_with_length_limit(input_source, length_limit):
-    offset = 0
-    buffer = allocate_buffer(BUFFER_SIZE)
-    bytes_remaining = length_limit
+```rust
+FUNCTION main():
+    // ... args parsing and input_source setup ...
+
+    // Apply skip if specified
+    IF args.skip IS Some(skip_bytes):
+        use std::io::Read;
+        let mut discard = vec![0; skip_bytes];
+        IF input_source.read_exact(&mut discard).is_err():
+            eprintln!("Error: Cannot skip {} bytes (file too short)", skip_bytes)
+            exit(1)
+
+    // If length is specified, wrap input in Take adapter
+    let limited_input = MATCH args.length:
+        Some(limit) => Box::new(input_source.take(limit as u64)),
+        None => Box::new(input_source)
+
+    // Create dumper with offset adjusted for skip
+    dumper = HexDumper::new(...)
+    dumper.set_offset(args.skip.unwrap_or(0))
+    dumper.dump(limited_input).unwrap()
+```
+
+**Step 3: Add `set_offset()` method in `src/dumper.rs`**
+
+```rust
+// In src/dumper.rs, add to impl HexDumper:
+FUNCTION set_offset(offset: usize):
+    self.offset = offset
+```
+
+**Alternative Approach: Handle skip/length in dumper.rs**
+
+```rust
+// Modify dump() in src/dumper.rs to accept skip and length
+FUNCTION dump_with_limits(input, skip: Option<usize>, length: Option<usize>):
+    // Skip bytes if needed
+    IF skip IS Some(n) AND n > 0:
+        discard = vec![0; n]
+        input.read_exact(&mut discard)?
+        self.offset = n
+
+    // Determine how many bytes to read total
+    bytes_remaining = length.unwrap_or(usize::MAX)
+    offset = self.offset
+    buffer = vec![0; BUFFER_SIZE]
 
     LOOP:
-        // Calculate how many bytes to read this iteration
-        bytes_to_read = min(buffer.length, bytes_remaining)
+        // Don't read more than bytes_remaining
+        read_size = min(buffer.len(), bytes_remaining)
+        IF read_size == 0:
+            BREAK
 
-        IF bytes_to_read == 0:
-            BREAK  // Reached length limit
-
-        // Read chunk (only up to bytes_to_read)
-        bytes_read = read_chunk(input_source, &mut buffer[0..bytes_to_read])?
-
+        bytes_read = read_chunk(input, &mut buffer[0..read_size])?
         IF bytes_read == 0:
-            BREAK  // End of file
+            BREAK
 
-        // Process the bytes
-        FOR chunk IN buffer[0..bytes_read].chunks(bytes_per_line):
-            print_line(offset, chunk, bytes_per_line, show_ascii)
-            offset += chunk.length
+        FOR chunk IN buffer[0..bytes_read].chunks(self.bytes_per_line):
+            print_line(offset, chunk, self.bytes_per_line, self.show_ascii)
+            offset += chunk.len()
 
         bytes_remaining -= bytes_read
 
-    RETURN Ok(())
-
-// Alternative: Using Take adapter
-FUNCTION apply_length_limit(input_source, length):
-    IF length IS Some(limit):
-        RETURN input_source.take(limit)  // Wrap in Take adapter
-    ELSE:
-        RETURN input_source
+    Ok(())
 ```
 
 ### Phase 4 Implementation: Color Support
 
-```
+**New file to create: `src/color.rs`**
+
+This module will handle all color-related functionality.
+
+```rust
+// src/color.rs - NEW FILE
+
+use std::fmt;
+
 ENUM Color:
     BrightBlack  // Gray - for null bytes (0x00)
     Green        // Printable ASCII (0x20-0x7E)
     Cyan         // High bytes (0x80+)
     Yellow       // Control characters (0x01-0x1F)
 
-FUNCTION colorize_hex_byte(byte, use_colors):
-    hex_string = format!("{:02x}", byte)
-
-    IF NOT use_colors:
-        RETURN hex_string
-
+FUNCTION get_color_for_byte(byte: u8) -> Color:
     // Select color based on byte value
-    color = MATCH byte:
+    MATCH byte:
         0x00 => Color::BrightBlack
         0x20..=0x7E => Color::Green
         0x80..=0xFF => Color::Cyan
         _ => Color::Yellow
 
-    RETURN apply_ansi_color(hex_string, color)
+FUNCTION colorize(text: &str, color: Color, use_colors: bool) -> String:
+    IF NOT use_colors:
+        RETURN text.to_string()
 
-FUNCTION apply_ansi_color(text, color):
-    // ANSI escape codes for colors
     ansi_code = MATCH color:
         Color::BrightBlack => "\x1b[90m"  // Bright black (gray)
         Color::Green => "\x1b[32m"         // Green
@@ -309,43 +379,94 @@ FUNCTION apply_ansi_color(text, color):
         Color::Yellow => "\x1b[33m"        // Yellow
 
     reset_code = "\x1b[0m"  // Reset to default
+    RETURN format!("{}{}{}", ansi_code, text, reset_code)
 
-    RETURN ansi_code + text + reset_code
+FUNCTION colorize_byte(byte: u8, use_colors: bool) -> String:
+    // Format byte as hex and apply color
+    hex_string = format!("{:02x}", byte)
 
-// Updated print_line with color support
-FUNCTION print_line_colored(offset, data, bytes_per_line, show_ascii, use_colors):
-    output = format_offset(offset) + ": "
+    IF NOT use_colors:
+        RETURN hex_string
+
+    color = get_color_for_byte(byte)
+    RETURN colorize(&hex_string, color, use_colors)
+```
+
+**Modify `src/main.rs` to declare the module:**
+
+```rust
+// Add at the top of src/main.rs with other mod declarations
+mod color;
+```
+
+**Modify `src/formatter.rs` to use colors:**
+
+```rust
+// Update imports in src/formatter.rs
+use crate::color::{colorize_byte, get_color_for_byte, colorize};
+
+// Modify print_line signature to accept use_colors parameter
+FUNCTION print_line(offset, data, bytes_per_line, show_ascii, use_colors):
+    output = format_offset(offset)
+    output += ": "
 
     // Print hex bytes with colors
     FOR byte IN data:
-        colored_hex = colorize_hex_byte(byte, use_colors)
-        output += colored_hex + " "
+        colored_hex = colorize_byte(*byte, use_colors)
+        output += &colored_hex
+        output += " "
 
-    // Padding
-    IF data.length < bytes_per_line:
-        padding = " ".repeat((bytes_per_line - data.length) * 3)
-        output += padding
+    // Padding for incomplete lines
+    IF data.len() < bytes_per_line:
+        padding_spaces = (bytes_per_line - data.len()) * 3
+        output += &" ".repeat(padding_spaces)
 
     // ASCII column (also colorized)
     IF show_ascii:
         output += " |"
         FOR byte IN data:
-            IF is_printable(byte):
-                char = (byte as char)
+            IF is_printable(*byte):
+                char_str = (*byte as char).to_string()
                 IF use_colors:
-                    output += apply_ansi_color(char, Color::Green)
+                    output += &colorize(&char_str, get_color_for_byte(*byte), true)
                 ELSE:
-                    output += char
+                    output += &char_str
             ELSE:
                 output += "."
         output += "|"
 
-    print(output)
+    println!("{}", output)
+```
+
+**Modify `src/dumper.rs` to pass use_colors:**
+
+```rust
+// Update the dump() method in src/dumper.rs
+FUNCTION dump(input):
+    // ... existing code ...
+
+    FOR chunk IN buffer[..bytes_read].chunks(self.bytes_per_line):
+        print_line(
+            offset,
+            chunk,
+            self.bytes_per_line,
+            self.show_ascii,
+            self.use_colors,  // ADD THIS PARAMETER
+        )
+        offset += chunk.len()
 ```
 
 ### Phase 4 Implementation: Multiple Output Formats
 
-```
+**Files to modify:**
+1. `src/formatter.rs` - Add format-specific functions
+2. `src/dumper.rs` - Use output_format in dump() method
+
+**Option A: Modify `src/formatter.rs` with format functions**
+
+```rust
+// Add these functions to src/formatter.rs
+
 FUNCTION format_line_by_type(offset, data, format, bytes_per_line, show_ascii, use_colors):
     MATCH format:
         OutputFormat::Canonical:
@@ -355,135 +476,259 @@ FUNCTION format_line_by_type(offset, data, format, bytes_per_line, show_ascii, u
             RETURN format_plain_hex(data, use_colors)
 
         OutputFormat::CArray:
-            RETURN format_c_array(offset, data)
+            RETURN format_c_array(data)
 
         OutputFormat::Uppercase:
             RETURN format_uppercase(offset, data, bytes_per_line, show_ascii, use_colors)
 
 FUNCTION format_canonical(offset, data, bytes_per_line, show_ascii, use_colors):
-    // Standard format: offset | hex | ASCII
-    // This is the current implementation
-    output = format!("{:08x}: ", offset)
+    // This is basically the current print_line implementation
+    // Delegate to existing print_line function
+    print_line(offset, data, bytes_per_line, show_ascii, use_colors)
 
-    FOR byte IN data:
-        hex = IF use_colors THEN colorize_hex_byte(byte, true)
-              ELSE format!("{:02x}", byte)
-        output += hex + " "
-
-    IF data.length < bytes_per_line:
-        output += " ".repeat((bytes_per_line - data.length) * 3)
-
-    IF show_ascii:
-        output += " |"
-        FOR byte IN data:
-            output += IF is_printable(byte) THEN (byte as char) ELSE '.'
-        output += "|"
-
-    RETURN output
-
-FUNCTION format_plain_hex(data, use_colors):
+FUNCTION format_plain_hex(offset, data, use_colors):
     // Just hex bytes, no offset or ASCII
     // Example: 48 65 6c 6c 6f
-    output = ""
+    let mut output = String::new()
 
-    FOR i, byte IN data.enumerate():
+    FOR (i, byte) IN data.iter().enumerate():
         IF i > 0:
-            output += " "
+            output.push(' ')
 
-        hex = IF use_colors THEN colorize_hex_byte(byte, true)
-              ELSE format!("{:02x}", byte)
-        output += hex
+        hex = IF use_colors:
+            colorize_byte(*byte, use_colors)
+        ELSE:
+            format!("{:02x}", *byte)
 
-    RETURN output
+        output.push_str(&hex)
+
+    println!("{}", output)
 
 FUNCTION format_c_array(offset, data):
     // C-style array format
-    // Example: 0x48, 0x65, 0x6c, 0x6c, 0x6f
-    output = ""
+    // Example: 0x48, 0x65, 0x6c, 0x6c, 0x6f,
+    let mut output = String::new()
 
-    FOR i, byte IN data.enumerate():
+    FOR (i, byte) IN data.iter().enumerate():
         IF i > 0:
-            output += ", "
-        output += format!("0x{:02x}", byte)
+            output.push_str(", ")
+        output.push_str(&format!("0x{:02x}", byte))
 
-    RETURN output
+    output.push(',')  // Trailing comma for C array
+    println!("{}", output)
 
 FUNCTION format_uppercase(offset, data, bytes_per_line, show_ascii, use_colors):
     // Same as canonical but with uppercase hex
-    output = format!("{:08X}: ", offset)  // Uppercase offset
+    let mut output = format!("{:08X}: ", offset)  // Uppercase offset
 
     FOR byte IN data:
-        // Uppercase hex digits
-        hex = IF use_colors THEN colorize_hex_byte_uppercase(byte, true)
-              ELSE format!("{:02X}", byte)
-        output += hex + " "
+        hex = format!("{:02X}", *byte)  // Uppercase hex
+        IF use_colors:
+            let color = get_color_for_byte(*byte)
+            output.push_str(&colorize(&hex, color, true))
+        ELSE:
+            output.push_str(&hex)
+        output.push(' ')
 
-    IF data.length < bytes_per_line:
-        output += " ".repeat((bytes_per_line - data.length) * 3)
+    // Padding
+    IF data.len() < bytes_per_line:
+        let padding = " ".repeat((bytes_per_line - data.len()) * 3)
+        output.push_str(&padding)
 
+    // ASCII column
     IF show_ascii:
-        output += " |"
+        output.push_str(" |")
         FOR byte IN data:
-            output += IF is_printable(byte) THEN (byte as char) ELSE '.'
-        output += "|"
+            IF is_printable(*byte):
+                output.push(*byte as char)
+            ELSE:
+                output.push('.')
+        output.push('|')
 
-    RETURN output
+    println!("{}", output)
+```
 
-FUNCTION colorize_hex_byte_uppercase(byte, use_colors):
-    // Same as colorize_hex_byte but uppercase
-    hex_string = format!("{:02X}", byte)  // Note: uppercase X
+**Modify `src/dumper.rs` to use format functions:**
 
-    IF NOT use_colors:
-        RETURN hex_string
+```rust
+// Update dump() method in src/dumper.rs
+use crate::formatter::{format_line_by_type};
+use crate::dumper::OutputFormat;
 
-    color = MATCH byte:
-        0x00 => Color::BrightBlack
-        0x20..=0x7E => Color::Green
-        0x80..=0xFF => Color::Cyan
-        _ => Color::Yellow
+FUNCTION dump(input):
+    // ... existing code ...
 
-    RETURN apply_ansi_color(hex_string, color)
+    FOR chunk IN buffer[..bytes_read].chunks(self.bytes_per_line):
+        // Use format dispatcher instead of direct print_line
+        format_line_by_type(
+            offset,
+            chunk,
+            self.output_format,  // USE THIS FIELD
+            self.bytes_per_line,
+            self.show_ascii,
+            self.use_colors,
+        )
+        offset += chunk.len()
+```
+
+**Alternative: Create separate formatter module**
+
+You could also create `src/formats.rs` to keep all format-specific code separate:
+
+```rust
+// src/formats.rs - NEW FILE (optional)
+use crate::dumper::OutputFormat;
+use crate::formatter::{format_offset, format_hex, is_printable};
+use crate::color::{colorize_byte, get_color_for_byte, colorize};
+
+pub fn format_and_print(
+    offset: usize,
+    data: &[u8],
+    format: OutputFormat,
+    bytes_per_line: usize,
+    show_ascii: bool,
+    use_colors: bool,
+) {
+    match format {
+        OutputFormat::Canonical => format_canonical(...),
+        OutputFormat::PlainHex => format_plain_hex(...),
+        OutputFormat::CArray => format_c_array(...),
+        OutputFormat::Uppercase => format_uppercase(...),
+    }
+}
+
+// ... format functions here ...
 ```
 
 ### Phase 4 Implementation: Uppercase/Lowercase Options
 
-```
-// Add to HexDumper structure
-STRUCTURE HexDumper:
-    bytes_per_line: usize
-    show_ascii: bool
-    output_format: OutputFormat
-    use_colors: bool
-    use_uppercase: bool  // NEW: flag for uppercase hex
-    offset: usize
+**Note:** This feature is already partially implemented via `OutputFormat::Uppercase`.
+However, if you want a separate `--uppercase` flag that works with all formats:
 
-FUNCTION format_hex_with_case(byte, uppercase):
-    // Format byte as hex with specified case
+**Modify `src/formatter.rs`:**
+
+```rust
+// Add helper functions to src/formatter.rs
+
+pub fn format_hex_with_case(byte: u8, uppercase: bool) -> String:
     IF uppercase:
-        RETURN format!("{:02X}", byte)  // Uppercase
+        format!("{:02X}", byte)  // Uppercase
     ELSE:
-        RETURN format!("{:02x}", byte)  // Lowercase
+        format!("{:02x}", byte)  // Lowercase
 
-FUNCTION format_offset_with_case(offset, uppercase):
-    // Format offset with specified case
+pub fn format_offset_with_case(offset: usize, uppercase: bool) -> String:
     IF uppercase:
-        RETURN format!("{:08X}", offset)  // Uppercase
+        format!("{:08X}", offset)  // Uppercase
     ELSE:
-        RETURN format!("{:08x}", offset)  // Lowercase
-
-// Updated print_line with case support
-FUNCTION print_line_with_case(offset, data, config):
-    output = format_offset_with_case(offset, config.use_uppercase)
-    output += ": "
-
-    FOR byte IN data:
-        hex = format_hex_with_case(byte, config.use_uppercase)
-        IF config.use_colors:
-            hex = apply_ansi_color(hex, get_color_for_byte(byte))
-        output += hex + " "
-
-    // ... rest of formatting
+        format!("{:08x}", offset)  // Lowercase
 ```
+
+**Alternative: Use OutputFormat::Uppercase**
+
+The cleaner approach is to use the existing `OutputFormat::Uppercase` enum variant,
+which is already defined. No additional code needed - just use `-o uppercase` flag.
+
+---
+
+## Summary: Files to Create/Modify for Phase 3 & 4
+
+### New Files to Create:
+
+1. **`src/color.rs`** (Phase 4 - Color Support)
+   - `Color` enum
+   - `get_color_for_byte()` function
+   - `colorize()` function
+   - `colorize_byte()` function
+
+2. **`src/formats.rs`** (Optional - Phase 4 - Multiple Formats)
+   - `format_and_print()` dispatcher
+   - `format_canonical()`
+   - `format_plain_hex()`
+   - `format_c_array()`
+   - `format_uppercase()`
+
+### Existing Files to Modify:
+
+1. **`src/main.rs`**
+   - **Phase 3**:
+     - Remove error when `input_file` is None
+     - Add stdin support
+     - Add `length` and `skip` CLI arguments
+     - Apply skip/length logic before calling dumper
+   - **Phase 4**:
+     - Add `mod color;` declaration
+     - Add `mod formats;` (if using separate formats module)
+
+2. **`src/dumper.rs`**
+   - **Phase 3**:
+     - Add `set_offset()` method (optional)
+     - OR modify `dump()` to handle skip/length
+   - **Phase 4**:
+     - Pass `use_colors` to print_line
+     - Pass `output_format` to format dispatcher
+     - Use `format_line_by_type()` instead of direct `print_line()`
+
+3. **`src/formatter.rs`**
+   - **Phase 4**:
+     - Update `print_line()` signature to accept `use_colors: bool`
+     - Import and use color functions
+     - Add `format_line_by_type()` dispatcher (if not in separate module)
+     - Add format-specific functions (or move to `formats.rs`)
+     - Add `format_hex_with_case()` and `format_offset_with_case()` (optional)
+
+### File Structure After Phase 3 & 4:
+
+```
+hexaprint/
+├── Cargo.toml
+├── README.md
+└── src/
+    ├── main.rs          // CLI args, stdin support, skip/length
+    ├── dumper.rs        // HexDumper struct, dump() method
+    ├── formatter.rs     // Line formatting, helpers
+    ├── color.rs         // NEW: Color support (ANSI codes)
+    └── formats.rs       // NEW (optional): Output format implementations
+```
+
+---
+
+## Quick Implementation Checklist
+
+### Phase 3 Remaining Tasks:
+
+**1. stdin Support (src/main.rs):**
+- [ ] Change lines 61-67 from error exit to stdin fallback
+- [ ] Use `io::stdin().lock()` when `args.input_file` is `None`
+
+**2. Skip Option (src/main.rs):**
+- [ ] Add `skip: Option<usize>` to Args struct
+- [ ] Read and discard skip bytes before calling dumper
+- [ ] Pass skip value to dumper for offset display
+
+**3. Length Option (src/main.rs):**
+- [ ] Add `length: Option<usize>` to Args struct
+- [ ] Wrap input in `.take(length)` adapter
+
+### Phase 4 Remaining Tasks:
+
+**1. Color Support:**
+- [ ] Create `src/color.rs` with Color enum and colorize functions
+- [ ] Add `mod color;` to `src/main.rs`
+- [ ] Update `print_line()` in `src/formatter.rs` to accept `use_colors: bool`
+- [ ] Pass `self.use_colors` from `src/dumper.rs` to `print_line()`
+- [ ] Apply colors to hex bytes and ASCII characters
+
+**2. Output Formats:**
+- [ ] Add format functions to `src/formatter.rs` (or new `src/formats.rs`)
+- [ ] Create `format_line_by_type()` dispatcher
+- [ ] Implement `format_plain_hex()`, `format_c_array()`, `format_uppercase()`
+- [ ] Call dispatcher from `src/dumper.rs` instead of `print_line()`
+- [ ] Pass `self.output_format` to dispatcher
+
+**3. Uppercase (Already exists via OutputFormat::Uppercase):**
+- [ ] No additional work needed - users can use `-o uppercase` flag
+
+---
 
 ### Advanced Features (Optional)
 
@@ -596,16 +841,16 @@ hexaprint/
 - [X] Add ASCII representation with non-printable character handling
 
 ### Phase 3: CLI and Configuration
-- [ ] Add command-line argument parsing
-- [ ] Support reading from stdin
-- [ ] Implement configurable bytes per line
-- [ ] Add skip and length options
+- [X] Add command-line argument parsing (clap is integrated)
+- [ ] Support reading from stdin (currently requires file)
+- [X] Implement configurable bytes per line (--bytes-per-line flag exists)
+- [ ] Add skip and length options (CLI args don't exist yet)
 
 ### Phase 4: Enhanced Output
-- [ ] Add color support
-- [ ] Implement multiple output formats
-- [ ] Add uppercase/lowercase hex options
-- [ ] Improve error messages
+- [ ] Add color support (field exists but not used in formatter)
+- [ ] Implement multiple output formats (enum exists but not used in formatter)
+- [ ] Add uppercase/lowercase hex options (OutputFormat::Uppercase exists)
+- [X] Improve error messages (good error handling exists)
 
 ### Phase 5: Advanced Features (Optional)
 - [ ] File comparison mode
