@@ -193,6 +193,298 @@ FUNCTION colorize(byte, text):
         RETURN yellow(text)        // Control characters
 ```
 
+### Phase 3 Implementation: Reading from stdin
+
+```
+FUNCTION get_input_source(input_file_option):
+    // Determine input source: file or stdin
+    MATCH input_file_option:
+        Some(path):
+            // Open file with error handling
+            TRY:
+                file = File::open(path)?
+                RETURN Ok(BufReader::new(file))
+            CATCH error:
+                eprintln!("Error opening file '{}': {}", path, error)
+                exit(1)
+
+        None:
+            // Read from stdin when no file is provided
+            stdin = io::stdin()
+            RETURN Ok(BufReader::new(stdin.lock()))
+
+// Updated main flow with stdin support
+FUNCTION main():
+    args = parse_arguments()
+
+    // Get input from file or stdin
+    input_source = get_input_source(args.input_file)
+
+    // Create and run dumper
+    dumper = HexDumper::new(...)
+    dumper.dump(input_source)?
+```
+
+### Phase 3 Implementation: Skip and Length Options
+
+```
+FUNCTION apply_skip_bytes(input_source, skip_bytes):
+    // Skip N bytes from the beginning
+    IF skip_bytes > 0:
+        TRY:
+            // Read and discard skip_bytes
+            discard_buffer = vec![0; skip_bytes]
+            input_source.read_exact(&mut discard_buffer)?
+        CATCH error:
+            eprintln!("Error skipping {} bytes: {}", skip_bytes, error)
+            RETURN Err(error)
+
+    RETURN Ok(())
+
+FUNCTION dump_with_length_limit(input_source, length_limit):
+    offset = 0
+    buffer = allocate_buffer(BUFFER_SIZE)
+    bytes_remaining = length_limit
+
+    LOOP:
+        // Calculate how many bytes to read this iteration
+        bytes_to_read = min(buffer.length, bytes_remaining)
+
+        IF bytes_to_read == 0:
+            BREAK  // Reached length limit
+
+        // Read chunk (only up to bytes_to_read)
+        bytes_read = read_chunk(input_source, &mut buffer[0..bytes_to_read])?
+
+        IF bytes_read == 0:
+            BREAK  // End of file
+
+        // Process the bytes
+        FOR chunk IN buffer[0..bytes_read].chunks(bytes_per_line):
+            print_line(offset, chunk, bytes_per_line, show_ascii)
+            offset += chunk.length
+
+        bytes_remaining -= bytes_read
+
+    RETURN Ok(())
+
+// Alternative: Using Take adapter
+FUNCTION apply_length_limit(input_source, length):
+    IF length IS Some(limit):
+        RETURN input_source.take(limit)  // Wrap in Take adapter
+    ELSE:
+        RETURN input_source
+```
+
+### Phase 4 Implementation: Color Support
+
+```
+ENUM Color:
+    BrightBlack  // Gray - for null bytes (0x00)
+    Green        // Printable ASCII (0x20-0x7E)
+    Cyan         // High bytes (0x80+)
+    Yellow       // Control characters (0x01-0x1F)
+
+FUNCTION colorize_hex_byte(byte, use_colors):
+    hex_string = format!("{:02x}", byte)
+
+    IF NOT use_colors:
+        RETURN hex_string
+
+    // Select color based on byte value
+    color = MATCH byte:
+        0x00 => Color::BrightBlack
+        0x20..=0x7E => Color::Green
+        0x80..=0xFF => Color::Cyan
+        _ => Color::Yellow
+
+    RETURN apply_ansi_color(hex_string, color)
+
+FUNCTION apply_ansi_color(text, color):
+    // ANSI escape codes for colors
+    ansi_code = MATCH color:
+        Color::BrightBlack => "\x1b[90m"  // Bright black (gray)
+        Color::Green => "\x1b[32m"         // Green
+        Color::Cyan => "\x1b[36m"          // Cyan
+        Color::Yellow => "\x1b[33m"        // Yellow
+
+    reset_code = "\x1b[0m"  // Reset to default
+
+    RETURN ansi_code + text + reset_code
+
+// Updated print_line with color support
+FUNCTION print_line_colored(offset, data, bytes_per_line, show_ascii, use_colors):
+    output = format_offset(offset) + ": "
+
+    // Print hex bytes with colors
+    FOR byte IN data:
+        colored_hex = colorize_hex_byte(byte, use_colors)
+        output += colored_hex + " "
+
+    // Padding
+    IF data.length < bytes_per_line:
+        padding = " ".repeat((bytes_per_line - data.length) * 3)
+        output += padding
+
+    // ASCII column (also colorized)
+    IF show_ascii:
+        output += " |"
+        FOR byte IN data:
+            IF is_printable(byte):
+                char = (byte as char)
+                IF use_colors:
+                    output += apply_ansi_color(char, Color::Green)
+                ELSE:
+                    output += char
+            ELSE:
+                output += "."
+        output += "|"
+
+    print(output)
+```
+
+### Phase 4 Implementation: Multiple Output Formats
+
+```
+FUNCTION format_line_by_type(offset, data, format, bytes_per_line, show_ascii, use_colors):
+    MATCH format:
+        OutputFormat::Canonical:
+            RETURN format_canonical(offset, data, bytes_per_line, show_ascii, use_colors)
+
+        OutputFormat::PlainHex:
+            RETURN format_plain_hex(data, use_colors)
+
+        OutputFormat::CArray:
+            RETURN format_c_array(offset, data)
+
+        OutputFormat::Uppercase:
+            RETURN format_uppercase(offset, data, bytes_per_line, show_ascii, use_colors)
+
+FUNCTION format_canonical(offset, data, bytes_per_line, show_ascii, use_colors):
+    // Standard format: offset | hex | ASCII
+    // This is the current implementation
+    output = format!("{:08x}: ", offset)
+
+    FOR byte IN data:
+        hex = IF use_colors THEN colorize_hex_byte(byte, true)
+              ELSE format!("{:02x}", byte)
+        output += hex + " "
+
+    IF data.length < bytes_per_line:
+        output += " ".repeat((bytes_per_line - data.length) * 3)
+
+    IF show_ascii:
+        output += " |"
+        FOR byte IN data:
+            output += IF is_printable(byte) THEN (byte as char) ELSE '.'
+        output += "|"
+
+    RETURN output
+
+FUNCTION format_plain_hex(data, use_colors):
+    // Just hex bytes, no offset or ASCII
+    // Example: 48 65 6c 6c 6f
+    output = ""
+
+    FOR i, byte IN data.enumerate():
+        IF i > 0:
+            output += " "
+
+        hex = IF use_colors THEN colorize_hex_byte(byte, true)
+              ELSE format!("{:02x}", byte)
+        output += hex
+
+    RETURN output
+
+FUNCTION format_c_array(offset, data):
+    // C-style array format
+    // Example: 0x48, 0x65, 0x6c, 0x6c, 0x6f
+    output = ""
+
+    FOR i, byte IN data.enumerate():
+        IF i > 0:
+            output += ", "
+        output += format!("0x{:02x}", byte)
+
+    RETURN output
+
+FUNCTION format_uppercase(offset, data, bytes_per_line, show_ascii, use_colors):
+    // Same as canonical but with uppercase hex
+    output = format!("{:08X}: ", offset)  // Uppercase offset
+
+    FOR byte IN data:
+        // Uppercase hex digits
+        hex = IF use_colors THEN colorize_hex_byte_uppercase(byte, true)
+              ELSE format!("{:02X}", byte)
+        output += hex + " "
+
+    IF data.length < bytes_per_line:
+        output += " ".repeat((bytes_per_line - data.length) * 3)
+
+    IF show_ascii:
+        output += " |"
+        FOR byte IN data:
+            output += IF is_printable(byte) THEN (byte as char) ELSE '.'
+        output += "|"
+
+    RETURN output
+
+FUNCTION colorize_hex_byte_uppercase(byte, use_colors):
+    // Same as colorize_hex_byte but uppercase
+    hex_string = format!("{:02X}", byte)  // Note: uppercase X
+
+    IF NOT use_colors:
+        RETURN hex_string
+
+    color = MATCH byte:
+        0x00 => Color::BrightBlack
+        0x20..=0x7E => Color::Green
+        0x80..=0xFF => Color::Cyan
+        _ => Color::Yellow
+
+    RETURN apply_ansi_color(hex_string, color)
+```
+
+### Phase 4 Implementation: Uppercase/Lowercase Options
+
+```
+// Add to HexDumper structure
+STRUCTURE HexDumper:
+    bytes_per_line: usize
+    show_ascii: bool
+    output_format: OutputFormat
+    use_colors: bool
+    use_uppercase: bool  // NEW: flag for uppercase hex
+    offset: usize
+
+FUNCTION format_hex_with_case(byte, uppercase):
+    // Format byte as hex with specified case
+    IF uppercase:
+        RETURN format!("{:02X}", byte)  // Uppercase
+    ELSE:
+        RETURN format!("{:02x}", byte)  // Lowercase
+
+FUNCTION format_offset_with_case(offset, uppercase):
+    // Format offset with specified case
+    IF uppercase:
+        RETURN format!("{:08X}", offset)  // Uppercase
+    ELSE:
+        RETURN format!("{:08x}", offset)  // Lowercase
+
+// Updated print_line with case support
+FUNCTION print_line_with_case(offset, data, config):
+    output = format_offset_with_case(offset, config.use_uppercase)
+    output += ": "
+
+    FOR byte IN data:
+        hex = format_hex_with_case(byte, config.use_uppercase)
+        IF config.use_colors:
+            hex = apply_ansi_color(hex, get_color_for_byte(byte))
+        output += hex + " "
+
+    // ... rest of formatting
+```
+
 ### Advanced Features (Optional)
 
 ```
