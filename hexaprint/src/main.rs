@@ -11,7 +11,7 @@ use crate::dumper::{HexDumper, OutputFormat};
 #[derive(Parser)]
 #[command(name = "hexaprint", about = "Hex dump utility", long_about = None)]
 struct Args {
-    /// Input file to read from
+    /// Input file to read from (reads from stdin if not provided)
     input_file: Option<String>,
 
     /// convert to binary
@@ -46,6 +46,23 @@ fn text_to_binary(text: &str) -> String {
         .join(" ")
 }
 
+fn get_input_source(input_file_option: Option<String>) -> Box<dyn BufRead> {
+    match input_file_option {
+        Some(path) => {
+            // Open file with error handling
+            let file = File::open(&path).unwrap_or_else(|e| {
+                eprintln!("Error opening file '{}': {}", path, e);
+                std::process::exit(1);
+            });
+            Box::new(io::BufReader::new(file))
+        }
+        None => {
+            // Read from stdin when no file is provided
+            let stdin = io::stdin();
+            Box::new(io::BufReader::new(stdin.lock()))
+        }
+    }
+}
 
 
 fn main() {
@@ -57,26 +74,12 @@ fn main() {
         std::process::exit(1);
     }
 
-    // Get input file or show error
-    let input_file = match args.input_file {
-        Some(path) => path,
-        None => {
-            eprintln!("Error: Input file is required");
-            eprintln!("Usage: hexaprint <INPUT_FILE> [OPTIONS]");
-            std::process::exit(1);
-        }
-    };
-
-    // Open the file
-    let file = File::open(&input_file).unwrap_or_else(|e| {
-        eprintln!("Error opening file '{}': {}", input_file, e);
-        std::process::exit(1);
-    });
+    // Get input source (file or stdin)
+    let reader = get_input_source(args.input_file);
 
     // Process based on mode
     if args.binary {
         // Binary mode: convert text to binary representation
-        let reader = io::BufReader::new(file);
         let mut writer = args.output.as_ref().map(|path| {
             BufWriter::new(File::create(path).expect("Failed to create output file"))
         });
@@ -92,7 +95,6 @@ fn main() {
         }
     } else {
         // Hex dump mode
-        let reader = io::BufReader::new(file);
         let mut dumper = HexDumper::new(
             args.bytes_per_line,
             args.show_ascii,
