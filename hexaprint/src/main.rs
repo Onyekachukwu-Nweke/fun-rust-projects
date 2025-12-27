@@ -3,6 +3,7 @@ use std::io::{self, BufRead, BufWriter, Write};
 use clap::Parser;
 
 mod dumper;
+mod format;
 mod formatter;
 mod color;
 
