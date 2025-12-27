@@ -4,6 +4,7 @@ use clap::Parser;
 
 mod dumper;
 mod formatter;
+mod color;
 
 use crate::dumper::{HexDumper, OutputFormat};
 
@@ -37,6 +38,14 @@ struct Args {
     /// use colors
     #[arg(short, long, default_value_t = true)]
     use_colors: bool,
+
+    /// Number of bytes to display
+    #[arg(short = 'n', long)]
+    length_bytes: Option<usize>,
+
+    /// Skip N bytes from start
+    #[arg(short = 's', long)]
+    skip_bytes: Option<usize>,
 }
 
 fn text_to_binary(text: &str) -> String {
@@ -100,6 +109,8 @@ fn main() {
             args.show_ascii,
             args.output_format,
             args.use_colors,
+            args.length_bytes,
+            args.skip_bytes,
         );
 
         dumper.dump(reader).unwrap();
