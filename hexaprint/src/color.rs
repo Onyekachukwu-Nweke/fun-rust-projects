@@ -27,18 +27,6 @@ pub fn colorize(text: &str, color: Color, use_colors: bool) -> String {
   };
   
   let reset_code = "\x1b[0m";
-  
+
   return format!("{}{}{}", ansi_code, text, reset_code)
-}
-
-pub fn colorize_byte(byte: u8, hex: String, use_colors: bool) -> String {
-  // Format byte as hex and apply color
-  // let hex_string = format!("{:02x}", byte);
-
-  // if !use_colors {
-  //   return hex_string;
-  // }
-
-  let color = get_color_for_byte(byte);
-  colorize(&hex, color, use_colors)
 }

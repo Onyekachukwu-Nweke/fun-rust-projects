@@ -1,7 +1,7 @@
 use std::io::{BufRead, Result};
 use std::fmt;
 use std::cmp::min;
-use crate::formatter::{read_chunk, print_line};
+use crate::formats::{read_chunk, format_line_by_type};
 use clap::ValueEnum;
 
 #[derive(Debug)]
@@ -93,9 +93,10 @@ impl HexDumper {
       }
 
       for chunk in buffer[..bytes_read].chunks(self.bytes_per_line) {
-        print_line(
+        format_line_by_type(
           offset,
           chunk,
+          self.output_format,
           self.bytes_per_line,
           self.show_ascii,
           self.use_colors,

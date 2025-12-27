@@ -3,7 +3,7 @@ use std::io::{self, BufRead, BufWriter, Write};
 use clap::Parser;
 
 mod dumper;
-mod format;
+mod formats;
 mod formatter;
 mod color;
 
@@ -25,15 +25,15 @@ struct Args {
     output: Option<String>,
 
     /// bytes per line
-    #[arg(short, long, default_value_t = 16)]
+    #[arg(short = 'c', long, default_value_t = 16)]
     bytes_per_line: usize,
 
     /// show ascii
-    #[arg(short, long, default_value_t = true)]
+    #[arg(short = 'a', long, default_value_t = true)]
     show_ascii: bool,
 
     /// output format
-    #[arg(short, long, default_value_t = OutputFormat::Canonical)]
+    #[arg(short = 'f', long, default_value_t = OutputFormat::Canonical)]
     output_format: OutputFormat,
 
     /// use colors
