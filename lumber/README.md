@@ -22,6 +22,461 @@ Lumber is designed to parse, analyze, and transform log files from various sourc
 
 ---
 
+## Project Structure
+
+```
+lumber/
+├── Cargo.toml                    # Project manifest and dependencies
+├── Cargo.lock                    # Dependency lock file
+├── README.md                     # This file
+├── LICENSE-MIT                   # MIT license
+├── LICENSE-APACHE                # Apache 2.0 license
+│
+├── src/
+│   ├── main.rs                   # Entry point, CLI setup, orchestration
+│   │
+│   ├── cli/
+│   │   ├── mod.rs                # CLI module exports
+│   │   ├── args.rs               # Command-line argument definitions (clap)
+│   │   └── config.rs             # Configuration file parser (YAML/TOML)
+│   │
+│   ├── core/
+│   │   ├── mod.rs                # Core module exports
+│   │   ├── log_entry.rs          # LogEntry struct and core data types
+│   │   ├── log_level.rs          # LogLevel enum and normalization
+│   │   └── error.rs              # Custom error types and Result aliases
+│   │
+│   ├── io/
+│   │   ├── mod.rs                # I/O module exports
+│   │   ├── reader.rs             # LogReader trait and implementations
+│   │   ├── buffered_reader.rs    # Buffered file reader
+│   │   ├── mmap_reader.rs        # Memory-mapped file reader
+│   │   ├── compressed_reader.rs  # Gzip/bzip2 reader
+│   │   └── stdin_reader.rs       # Standard input reader
+│   │
+│   ├── parsers/
+│   │   ├── mod.rs                # Parser module exports and registry
+│   │   ├── traits.rs             # Parser trait definitions
+│   │   ├── detector.rs           # Format detection logic
+│   │   ├── docker_json.rs        # Docker JSON log parser
+│   │   ├── syslog.rs             # Syslog format parser
+│   │   ├── json_lines.rs         # JSON Lines parser
+│   │   ├── common_log.rs         # Apache/nginx common log format
+│   │   ├── log4j.rs              # Log4j pattern parser
+│   │   ├── structured.rs         # Generic structured log parser
+│   │   └── unstructured.rs       # Fallback parser for poorly formatted logs
+│   │
+│   ├── extractors/
+│   │   ├── mod.rs                # Extractor module exports
+│   │   ├── timestamp.rs          # Multi-format timestamp extraction
+│   │   ├── level.rs              # Log level detection and normalization
+│   │   ├── metadata.rs           # Key-value pair extraction
+│   │   └── patterns.rs           # Common regex patterns (lazy_static)
+│   │
+│   ├── filters/
+│   │   ├── mod.rs                # Filter module exports
+│   │   ├── traits.rs             # Filter trait definition
+│   │   ├── chain.rs              # Filter chain orchestration
+│   │   ├── time_range.rs         # Time-based filtering
+│   │   ├── level.rs              # Log level filtering
+│   │   ├── keyword.rs            # Keyword/regex search
+│   │   ├── metadata.rs           # Metadata field filtering
+│   │   └── composite.rs          # Composite filters (AND, OR, NOT)
+│   │
+│   ├── analyzers/
+│   │   ├── mod.rs                # Analyzer module exports
+│   │   ├── statistics.rs         # Statistics collection
+│   │   ├── aggregator.rs         # Log aggregation and grouping
+│   │   ├── correlator.rs         # Cross-source log correlation
+│   │   └── patterns.rs           # Pattern detection (error clustering)
+│   │
+│   ├── output/
+│   │   ├── mod.rs                # Output module exports
+│   │   ├── traits.rs             # Writer trait definition
+│   │   ├── json.rs               # JSON output writer
+│   │   ├── json_lines.rs         # JSON Lines output
+│   │   ├── csv.rs                # CSV output writer
+│   │   ├── pretty.rs             # Pretty-print/human-readable output
+│   │   ├── table.rs              # Table format output
+│   │   └── template.rs           # Custom template engine
+│   │
+│   └── utils/
+│       ├── mod.rs                # Utility module exports
+│       ├── performance.rs        # Performance optimization helpers
+│       ├── progress.rs           # Progress bar integration
+│       └── compression.rs        # Compression detection and handling
+│
+├── tests/
+│   ├── integration_tests.rs      # Integration tests
+│   ├── parser_tests.rs           # Parser-specific tests
+│   ├── filter_tests.rs           # Filter logic tests
+│   └── fixtures/                 # Test data fixtures
+│       ├── docker_logs.json      # Sample Docker logs
+│       ├── syslog_samples.log    # Sample syslog entries
+│       ├── mixed_format.log      # Mixed format logs
+│       └── malformed.log         # Poorly formatted logs
+│
+├── benches/
+│   ├── parsing_benchmark.rs      # Parser performance benchmarks
+│   ├── filtering_benchmark.rs    # Filter performance benchmarks
+│   └── io_benchmark.rs           # I/O performance benchmarks
+│
+├── examples/
+│   ├── basic_usage.rs            # Simple usage example
+│   ├── custom_parser.rs          # Creating custom parser
+│   ├── advanced_filtering.rs    # Complex filter chains
+│   └── output_formats.rs         # Using different output formats
+│
+└── docs/
+    ├── architecture.md           # Architecture documentation
+    ├── parser_guide.md           # Parser development guide
+    ├── performance.md            # Performance tuning guide
+    └── api/                      # Generated API docs (rustdoc)
+```
+
+---
+
+## Product Architecture
+
+### High-Level Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                          CLI Entry Point                            │
+│                         (main.rs, cli/)                             │
+│  • Parse command-line arguments                                     │
+│  • Load configuration file                                          │
+│  • Set up logging/error handling                                    │
+└────────────────────────┬────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      Pipeline Orchestrator                          │
+│                         (main.rs)                                   │
+│  • Coordinate I/O → Parse → Filter → Analyze → Output              │
+│  • Manage error recovery                                            │
+│  • Track statistics                                                 │
+└────────────┬────────────────────────┬────────────────┬──────────────┘
+             │                        │                │
+             ▼                        ▼                ▼
+┌────────────────────┐   ┌────────────────────┐   ┌────────────────┐
+│   Input Layer      │   │  Processing Layer  │   │  Output Layer  │
+│     (io/)          │   │                    │   │   (output/)    │
+└────────────────────┘   └────────────────────┘   └────────────────┘
+```
+
+### Detailed Component Architecture
+
+```
+┌───────────────────────────────────────────────────────────────────────────┐
+│                              INPUT LAYER                                  │
+├───────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   ┌──────────────────┐      ┌─────────────────┐    ┌─────────────────┐  │
+│   │  File Reader     │      │ Compressed      │    │  Stdin Reader   │  │
+│   │                  │      │ Reader          │    │                 │  │
+│   │  • BufReader     │      │ • Gzip          │    │  • Pipe support │  │
+│   │  • Memory-mapped │      │ • Bzip2         │    │  • Stream mode  │  │
+│   │  • Read-ahead    │      │ • Auto-detect   │    │                 │  │
+│   └──────────────────┘      └─────────────────┘    └─────────────────┘  │
+│                                                                           │
+│   All implement: Iterator<Item = String> (line-by-line)                  │
+└─────────────────────────────┬─────────────────────────────────────────────┘
+                              │
+                              ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│                           PARSING LAYER                                   │
+├───────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   ┌─────────────────────────────────────────────────────────────────┐    │
+│   │              Format Detector (detector.rs)                      │    │
+│   │  • Sample first N lines                                         │    │
+│   │  • Try each parser, score confidence                            │    │
+│   │  • Select best-match format                                     │    │
+│   └────────────────────────┬────────────────────────────────────────┘    │
+│                            │                                             │
+│                            ▼                                             │
+│   ┌───────────────────────────────────────────────────────────────┐     │
+│   │                  Parser Registry                               │     │
+│   │  Routes to appropriate parser based on format                  │     │
+│   └───┬───────────┬───────────┬──────────┬──────────┬─────────────┘     │
+│       │           │           │          │          │                    │
+│   ┌───▼───┐   ┌───▼───┐  ┌────▼────┐ ┌──▼──┐  ┌────▼────────┐          │
+│   │Docker │   │Syslog │  │  JSON   │ │Log4j│  │Unstructured │          │
+│   │ JSON  │   │       │  │  Lines  │ │     │  │  (fallback) │          │
+│   └───────┘   └───────┘  └─────────┘ └─────┘  └─────────────┘          │
+│                                                                           │
+│   All implement: Parser trait                                            │
+│   fn parse(line: &str) -> Result<LogEntry>                               │
+│   fn matches(line: &str) -> bool                                         │
+└─────────────────────────────┬─────────────────────────────────────────────┘
+                              │
+                              ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│                      NORMALIZATION LAYER                                  │
+├───────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   ┌─────────────────┐   ┌─────────────────┐   ┌──────────────────┐      │
+│   │   Timestamp     │   │  Level          │   │   Metadata       │      │
+│   │   Extractor     │   │  Normalizer     │   │   Extractor      │      │
+│   │                 │   │                 │   │                  │      │
+│   │ • Multi-format  │   │ • ERROR → Error │   │ • Key-value pairs│      │
+│   │ • Timezone      │   │ • WARN → Warn   │   │ • Container ID   │      │
+│   │ • Fallback      │   │ • INFO → Info   │   │ • Custom fields  │      │
+│   └─────────────────┘   └─────────────────┘   └──────────────────┘      │
+│                                                                           │
+│   Produces: Normalized LogEntry with consistent fields                   │
+└─────────────────────────────┬─────────────────────────────────────────────┘
+                              │
+                              ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│                         FILTERING LAYER                                   │
+├───────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   ┌──────────────────────────────────────────────────────────────┐       │
+│   │               Filter Chain (filters/chain.rs)                │       │
+│   │  • Applies filters in sequence                               │       │
+│   │  • Short-circuit evaluation (AND logic)                      │       │
+│   │  • Optimizes filter order by selectivity                     │       │
+│   └──────┬───────────┬──────────┬──────────┬───────────┬─────────┘       │
+│          │           │          │          │           │                 │
+│   ┌──────▼──┐  ┌─────▼────┐ ┌──▼─────┐ ┌──▼──────┐ ┌──▼────────┐       │
+│   │  Time   │  │  Level   │ │Keyword │ │Metadata │ │ Composite │       │
+│   │  Range  │  │  Filter  │ │ Filter │ │ Filter  │ │ (AND/OR)  │       │
+│   └─────────┘  └──────────┘ └────────┘ └─────────┘ └───────────┘       │
+│                                                                           │
+│   All implement: Filter trait                                            │
+│   fn matches(&self, entry: &LogEntry) -> bool                            │
+└─────────────────────────────┬─────────────────────────────────────────────┘
+                              │
+                              ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│                         ANALYSIS LAYER                                    │
+├───────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   ┌────────────────┐   ┌────────────────┐   ┌──────────────────┐        │
+│   │  Statistics    │   │  Aggregator    │   │  Correlator      │        │
+│   │  Collector     │   │                │   │                  │        │
+│   │                │   │ • Group by     │   │ • Time-window    │        │
+│   │ • Count by     │   │   field        │   │   correlation    │        │
+│   │   level        │   │ • Time-series  │   │ • Multi-source   │        │
+│   │ • Time range   │   │ • Top N        │   │   matching       │        │
+│   │ • Error        │   │                │   │ • Trace ID       │        │
+│   │   patterns     │   │                │   │   tracking       │        │
+│   └────────────────┘   └────────────────┘   └──────────────────┘        │
+│                                                                           │
+│   Updates incrementally as logs are processed                            │
+└─────────────────────────────┬─────────────────────────────────────────────┘
+                              │
+                              ▼
+┌───────────────────────────────────────────────────────────────────────────┐
+│                          OUTPUT LAYER                                     │
+├───────────────────────────────────────────────────────────────────────────┤
+│                                                                           │
+│   ┌──────────────────────────────────────────────────────────────┐       │
+│   │            Output Format Router                              │       │
+│   │  Selects writer based on --output flag                       │       │
+│   └───┬───────────┬─────────┬──────────┬──────────┬──────────────┘       │
+│       │           │         │          │          │                      │
+│   ┌───▼──┐   ┌────▼───┐ ┌──▼─────┐ ┌──▼──┐  ┌────▼─────┐               │
+│   │ JSON │   │  CSV   │ │ Pretty │ │Table│  │ Template │               │
+│   │      │   │        │ │ Print  │ │     │  │  Custom  │               │
+│   │• Full│   │• Flat  │ │• Color │ │• CLI│  │ • User   │               │
+│   │  data│   │  table │ │• Human │ │  UI │  │   format │               │
+│   └──────┘   └────────┘ └────────┘ └─────┘  └──────────┘               │
+│                                                                           │
+│   All implement: Writer trait                                            │
+│   fn write_entry(&mut self, entry: &LogEntry)                            │
+│   fn write_header(&mut self)                                             │
+│   fn write_footer(&mut self)                                             │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+### Data Flow Diagram
+
+```
+┌──────────────┐
+│  Log File(s) │
+└──────┬───────┘
+       │
+       ▼
+┌──────────────────────────┐
+│  Read (buffered/mmap)    │  ───────┐
+└──────┬───────────────────┘         │
+       │                             │
+       ▼                             │  Streaming
+┌──────────────────────────┐         │  (line-by-line)
+│  Format Detection        │         │
+│  (sample first N lines)  │         │
+└──────┬───────────────────┘         │
+       │                             │
+       ▼                             │
+┌──────────────────────────┐         │
+│  Parse (format-specific) │  ◄──────┘
+│  → Raw LogEntry          │
+└──────┬───────────────────┘
+       │
+       ▼
+┌──────────────────────────┐
+│  Normalize               │
+│  • Extract timestamp     │
+│  • Normalize level       │
+│  • Extract metadata      │
+└──────┬───────────────────┘
+       │
+       ▼
+┌──────────────────────────┐
+│  Filter Chain            │
+│  (time, level, keyword)  │
+└──────┬───────────────────┘
+       │
+       ├─── Matches? No ────► Drop entry
+       │
+       ▼ Yes
+┌──────────────────────────┐
+│  Analyze (optional)      │
+│  • Update statistics     │
+│  • Aggregate data        │
+└──────┬───────────────────┘
+       │
+       ▼
+┌──────────────────────────┐
+│  Format & Write          │
+│  (JSON/CSV/Pretty/etc)   │
+└──────┬───────────────────┘
+       │
+       ▼
+┌──────────────────────────┐
+│  Output (file/stdout)    │
+└──────────────────────────┘
+```
+
+### Core Data Structure
+
+```rust
+// Central data structure that flows through the pipeline
+struct LogEntry {
+    // Original raw line
+    raw_line: String,
+    line_number: u64,
+
+    // Normalized fields
+    timestamp: Option<DateTime<Utc>>,
+    level: Option<LogLevel>,
+    message: String,
+
+    // Additional extracted data
+    metadata: HashMap<String, String>,
+
+    // Parsing metadata
+    format: LogFormat,
+    parse_errors: Vec<String>,
+}
+
+// Flows through:
+// Reader → Parser → Normalizer → Filter → Analyzer → Writer
+```
+
+### Threading & Concurrency Model
+
+```
+Single File (< 100MB):
+┌────────────────────────────────────────────┐
+│  Single-threaded sequential processing     │
+│  Main thread: Read → Parse → Filter → Write│
+└────────────────────────────────────────────┘
+
+Single Large File (> 100MB):
+┌────────────────────────────────────────────┐
+│  Main thread: Read lines                   │
+│       │                                     │
+│       ▼                                     │
+│  Rayon: Parallel parse + filter            │
+│       │                                     │
+│       ▼                                     │
+│  Main thread: Aggregate + write (ordered)  │
+└────────────────────────────────────────────┘
+
+Multiple Files:
+┌────────────────────────────────────────────┐
+│  Rayon: Process files in parallel          │
+│       │                                     │
+│  ┌────┼────┬────────┬────────┐            │
+│  │    │    │        │        │            │
+│  ▼    ▼    ▼        ▼        ▼            │
+│ File1 File2 File3  File4  File5           │
+│  │    │    │        │        │            │
+│  └────┴────┴────────┴────────┘            │
+│       │                                     │
+│       ▼                                     │
+│  Main thread: Merge + correlate + write    │
+└────────────────────────────────────────────┘
+```
+
+### Error Handling Flow
+
+```
+┌─────────────────┐
+│  Parse Error    │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────────────────┐
+│  Error Recovery Handler     │
+│  • Log to stderr            │
+│  • Increment error count    │
+│  • Create partial LogEntry? │
+└────────┬────────────────────┘
+         │
+         ├─── Count < threshold ───► Continue processing
+         │
+         └─── Count ≥ threshold ───► Abort with error
+```
+
+### Performance Optimization Strategy
+
+```
+┌──────────────────────────────────────────────┐
+│  File Size Assessment                        │
+└─────────┬────────────────────────────────────┘
+          │
+    ┌─────┴──────┐
+    │            │
+< 100MB      > 100MB
+    │            │
+    ▼            ▼
+┌──────┐    ┌─────────┐
+│BufRead│    │  mmap   │
+└──────┘    └─────────┘
+    │            │
+    ▼            ▼
+Sequential   Parallel
+Processing   Processing
+    │            │
+    └─────┬──────┘
+          │
+          ▼
+┌──────────────────┐
+│  Optimization    │
+│  • Lazy parsing  │
+│  • Zero-copy     │
+│  • Regex caching │
+│  • Filter order  │
+└──────────────────┘
+```
+
+### Extension Points
+
+The architecture supports extensibility through:
+
+1. **Custom Parsers**: Implement `Parser` trait
+2. **Custom Filters**: Implement `Filter` trait
+3. **Custom Output Writers**: Implement `Writer` trait
+4. **Plugin System** (future): Dynamic loading of parsers/filters
+5. **Configuration Files**: YAML/TOML for custom patterns and formats
+
+---
+
 ## Implementation Phases
 
 ### Phase 1: Core Input/Output & Basic Parsing Infrastructure
